@@ -1,5 +1,6 @@
 package com.azhe.mySpring.applicationContext;
 
+import com.azhe.mySpring.annotations.Autowired;
 import com.azhe.mySpring.bean.BeanDefinition;
 import com.azhe.mySpring.factory.DefaultListableBeanFactory;
 import com.azhe.mySpring.postprocessor.BeanDefinitionRegistryPostProcessor;
@@ -8,10 +9,9 @@ import com.sun.istack.internal.Nullable;
 import com.sun.xml.internal.ws.util.StringUtils;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -36,6 +36,10 @@ public class SpringApplicationContext {
      */
     private volatile List<String> beanDefinitionNames = new ArrayList(256);
     /**
+     * 过滤重复扫描的包
+     */
+    public static Set<String> packageNameSet = new HashSet<>();
+    /**
      *
      * @param componentClasses 将配置类注册入容器中
      */
@@ -50,8 +54,14 @@ public class SpringApplicationContext {
         synchronized (this.startupShutdownMonitor) {
             //执行PostProcessor方法
             invokeBeanFactoryPostProcessors();
-
+            finishBeanFactoryInitialization();
         }
+    }
+
+    private void finishBeanFactoryInitialization() {
+        beanDefinitionNames.forEach(beanName -> {
+            getBean(beanName,null);
+        });
     }
 
     /**
@@ -64,9 +74,9 @@ public class SpringApplicationContext {
         for (String beanName:beanNamesForType){
             //创建bean，并执行方法
             BeanDefinitionRegistryPostProcessor bean = getBean(beanName, BeanDefinitionRegistryPostProcessor.class);
-            bean.postProcessBeanDefinitionRegistry(beanDefinitionMap);
+            bean.postProcessBeanDefinitionRegistry(this);
         }
-
+        packageNameSet.clear();
     }
 
     /**
@@ -80,6 +90,18 @@ public class SpringApplicationContext {
             try {
                 BeanDefinition beanDefinition = beanDefinitionMap.get(beanName);
                 singletonObject = beanDefinition.getBeanClass().newInstance();
+                //给属性赋值
+                Field[] declaredFields = singletonObject.getClass().getDeclaredFields();
+                //遍历所有字段看是否有Autowired
+                for (Field field:declaredFields){
+                    //还要解决循环依赖
+                    if(field.isAnnotationPresent(Autowired.class)){
+                        field.setAccessible(true);
+                        String beanNameN = field.getType().getSimpleName().replaceFirst(field.getType().getSimpleName().substring(0, 1), field.getType().getSimpleName().substring(0, 1).toLowerCase());
+                        field.set(singletonObject,getBean(beanNameN,field.getType()));
+                    }
+                }
+                singletonObjects.put(beanName,singletonObject);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -108,7 +130,7 @@ public class SpringApplicationContext {
      * 注册类
      * @param componentClasses
      */
-                                        public void register(Class<?> componentClasses){
+    public void register(Class<?> componentClasses){
         //1.先将该类定义成beanDefinition
         BeanDefinition beanDefinition = new BeanDefinition(componentClasses);
         //2.将该类的类名第一个字母小写当作改bean的名称
@@ -131,5 +153,8 @@ public class SpringApplicationContext {
         }
     }
 
+    public Map<String, BeanDefinition> getBeanDefinition(){
+        return beanDefinitionMap;
+    }
 
 }

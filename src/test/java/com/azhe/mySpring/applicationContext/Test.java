@@ -1,5 +1,7 @@
 package com.azhe.mySpring.applicationContext;
 
+import com.azhe.mySpring.annotations.ComponentScan;
+
 /**
  * @Description 测试实体类
  * @Author xwz

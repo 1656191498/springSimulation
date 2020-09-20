@@ -1,5 +1,7 @@
 package com.azhe.mySpring.applicationContext;
 
+import com.azhe.testSpring.Appconfig;
+
 /**
  * @Description 测试Spring
  * @Author xwz
@@ -9,6 +11,6 @@ package com.azhe.mySpring.applicationContext;
 public class SpringTest {
     public static void main(String[] args) {
 
-        SpringApplicationContext springApplicationContext = new SpringApplicationContext(Test.class);
+        SpringApplicationContext springApplicationContext = new SpringApplicationContext(Appconfig.class);
     }
 }

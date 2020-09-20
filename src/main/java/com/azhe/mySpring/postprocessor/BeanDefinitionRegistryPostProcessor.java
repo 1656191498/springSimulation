@@ -1,8 +1,6 @@
 package com.azhe.mySpring.postprocessor;
 
-import com.azhe.mySpring.bean.BeanDefinition;
-
-import java.util.Map;
+import com.azhe.mySpring.applicationContext.SpringApplicationContext;
 
 /**
  * @Description TODO
@@ -11,5 +9,5 @@ import java.util.Map;
  * @Version 1.0
  */
 public interface BeanDefinitionRegistryPostProcessor extends BeanFactoryPostProcessor{
-    void postProcessBeanDefinitionRegistry(Map<String, BeanDefinition> beanDefinitionMap);
+    void postProcessBeanDefinitionRegistry(SpringApplicationContext context);
 }
