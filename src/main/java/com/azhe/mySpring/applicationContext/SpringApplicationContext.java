@@ -2,17 +2,21 @@ package com.azhe.mySpring.applicationContext;
 
 import com.azhe.mySpring.annotations.Autowired;
 import com.azhe.mySpring.bean.BeanDefinition;
-import com.azhe.mySpring.factory.DefaultListableBeanFactory;
+import com.azhe.mySpring.cglib.ProxySpring;
+import com.azhe.mySpring.cglib.ProxyTemplate;
+import com.azhe.mySpring.factory.ObjectFactory;
 import com.azhe.mySpring.postprocessor.BeanDefinitionRegistryPostProcessor;
 import com.azhe.mySpring.postprocessor.ConfigurationClassPostProcessor;
-import com.sun.istack.internal.Nullable;
-import com.sun.xml.internal.ws.util.StringUtils;
+import net.sf.cglib.proxy.CallbackFilter;
+import net.sf.cglib.proxy.Enhancer;
+import sun.awt.SunHints;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * @Description spring容器,简略版注解spring
@@ -37,6 +41,11 @@ public class SpringApplicationContext {
      */
     public static Map<String,Object> earlySingletonObjects = new ConcurrentHashMap<>(256);
     /**
+     * 三级缓存，用来处理对象
+     */
+    public static Map<String, ObjectFactory<?>> singletonFactories = new ConcurrentHashMap<>(256);
+
+    /**
      * bean名称列表
      */
     private volatile List<String> beanDefinitionNames = new ArrayList(256);
@@ -44,10 +53,12 @@ public class SpringApplicationContext {
      * 过滤重复扫描的包
      */
     public static Set<String> packageNameSet = new HashSet<>();
+    public static Map<String,String> proxyMap = new HashMap<>();
     /**
      * 是否正在创建
      */
     public static Set<String> isCreateBean = new HashSet<>();
+    public static final Object singletonMonitor = new Object();
     /**
      *
      * @param componentClasses 将配置类注册入容器中
@@ -103,26 +114,23 @@ public class SpringApplicationContext {
      * @param beanName
      * @return
      */
-    private Object doGetBean(String beanName){
-        Object singletonObject = singletonObjects.get(beanName);
+    public Object doGetBean(String beanName){
+        //先从一级缓存中拿，拿不到，看是否在创建中
+        Object singletonObject = getSingletonObject(beanName);
         if(singletonObject == null){
-            //如果正在创建的话
-            if(isCreateBean.contains(beanName)){
-                //从二级缓存中拿
-                return earlySingletonObjects.get(beanName);
-            }else {
-                isCreateBean.add(beanName);
-            }
+            isCreateBean.add(beanName);
             try {
                 BeanDefinition beanDefinition = beanDefinitionMap.get(beanName);
                 singletonObject = beanDefinition.getBeanClass().newInstance();
-                earlySingletonObjects.put(beanName,singletonObject);
+                Object finalSingletonObject = singletonObject;
+                singletonFactories.put(beanName,() -> getEarlyObjects(beanName, finalSingletonObject));
                 //给属性赋值
                 Field[] declaredFields = singletonObject.getClass().getDeclaredFields();
                 populateBean(singletonObject,declaredFields);
-                singletonObjects.put(beanName,singletonObject);
+                singletonObjects.put(beanName,earlySingletonObjects.getOrDefault(beanName,singletonObject));
                 //将该bean从缓存池中移除
                 earlySingletonObjects.remove(beanName);
+                singletonFactories.remove(beanName);
                 isCreateBean.remove(beanName);
             } catch (Exception e) {
                 e.printStackTrace();
@@ -130,6 +138,67 @@ public class SpringApplicationContext {
         }
         return singletonObject;
     }
+
+    /**
+     * 设置早期对象,这里只简单处理动态代理，spring还有很多对对象的预处理
+     * @param beanName
+     * @param singletonObject
+     * @return
+     */
+    private Object getEarlyObjects(String beanName,Object singletonObject){
+        Object exposedObject = singletonObject;
+        //数组代表代理类
+        Map<Method,List<ProxyTemplate>> executionMap = new HashMap<>();
+        proxyMap.forEach((key,value) -> {
+            //判断是否符合规则
+            Pattern pattern = Pattern.compile(key);
+            //方法循环
+            Class<?> aClass = singletonObject.getClass();
+            for (Method m : aClass.getMethods()) {
+                String[] s = m.toString().split(" ");
+                Matcher matcher = pattern.matcher(s[s.length-1]);
+                if(matcher.matches()){
+                    if(executionMap.containsKey(m)){
+                        executionMap.get(m).add((ProxyTemplate) doGetBean(value));
+                    }else{
+                        ArrayList<ProxyTemplate> objects = new ArrayList<>();
+                        objects.add((ProxyTemplate) doGetBean(value));
+                        executionMap.put(m,objects);
+                    }
+                }
+            }
+        });
+
+        if(executionMap.size()>0){
+            Enhancer enhancer = new Enhancer();
+            enhancer.setSuperclass(singletonObject.getClass());
+            enhancer.setCallback(new ProxySpring(executionMap,exposedObject));
+            exposedObject = enhancer.create();
+            return exposedObject;
+        }
+        return singletonObject;
+    }
+
+    private Object getSingletonObject(String beanName){
+        Object singletonObject = singletonObjects.get(beanName);
+        synchronized (singletonMonitor) {
+            if (singletonObject == null && isCreateBean.contains(beanName)) {
+                singletonObject = earlySingletonObjects.get(beanName);
+                if (singletonObject == null) {
+                    ObjectFactory<?> objectFactory = singletonFactories.get(beanName);
+                    if(objectFactory!=null){
+                        singletonObject = objectFactory.getObject();
+                        //放到二级缓存中
+                        earlySingletonObjects.put(beanName,singletonObject);
+                        //从三级缓存中删除
+                        singletonFactories.remove(beanName);
+                    }
+                }
+            }
+        }
+        return singletonObject;
+    }
+
 
     /**
      * 属性赋值
@@ -212,31 +281,36 @@ public class SpringApplicationContext {
      * 注册类
      * @param componentClasses
      */
-    public void register(Class<?> componentClasses){
+    public String register(Class<?> componentClasses){
         //1.先将该类定义成beanDefinition
         BeanDefinition beanDefinition = new BeanDefinition(componentClasses);
         //2.将该类的类名第一个字母小写当作改bean的名称
         String beanName = componentClasses.getSimpleName().replaceFirst(componentClasses.getSimpleName().substring(0,1),componentClasses.getSimpleName().substring(0,1).toLowerCase());
         //3.注册beanDefinition
-        registerBeanDefinition(beanName,beanDefinition);
+        return registerBeanDefinition(beanName,beanDefinition);
     }
 
     /**
      * 将我们的registerBeanDefinition注册入容器中
      * @param beanName
      * @param beanDefinition
+     * @return
      */
-    public void registerBeanDefinition(String beanName, BeanDefinition beanDefinition){
+    public String registerBeanDefinition(String beanName, BeanDefinition beanDefinition){
         //1.判断我们容器的单例池中是否有改beanDefinition
         BeanDefinition existingDefinition = this.beanDefinitionMap.get(beanName);
         if(existingDefinition==null){
             this.beanDefinitionMap.put(beanName,beanDefinition);
             beanDefinitionNames.add(beanName);
         }
+        return beanName;
     }
 
     public Map<String, BeanDefinition> getBeanDefinition(){
         return beanDefinitionMap;
     }
 
+    public void registerProxyTemplate(String value, String beanName) {
+        proxyMap.put(value,beanName);
+    }
 }

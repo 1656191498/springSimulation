@@ -1,6 +1,8 @@
 package com.azhe.mySpring.applicationContext;
 
 import com.azhe.testSpring.Appconfig;
+import com.azhe.testSpring.ServiceA;
+import com.azhe.testSpring.ServiceB;
 
 /**
  * @Description 测试Spring
@@ -12,5 +14,7 @@ public class SpringTest {
     public static void main(String[] args) {
 
         SpringApplicationContext springApplicationContext = new SpringApplicationContext(Appconfig.class);
+        ServiceA bean = (ServiceA) springApplicationContext.doGetBean("serviceA");
+        bean.test();
     }
 }

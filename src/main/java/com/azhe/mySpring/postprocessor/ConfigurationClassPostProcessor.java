@@ -2,11 +2,14 @@ package com.azhe.mySpring.postprocessor;
 
 import com.azhe.mySpring.annotations.Component;
 import com.azhe.mySpring.annotations.ComponentScan;
+import com.azhe.mySpring.annotations.ProxyScan;
 import com.azhe.mySpring.applicationContext.SpringApplicationContext;
 import com.azhe.mySpring.bean.BeanDefinition;
+import com.azhe.mySpring.cglib.ProxyTemplate;
 
 import java.io.File;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
 import java.util.*;
 
 /**
@@ -25,6 +28,10 @@ public class ConfigurationClassPostProcessor implements BeanDefinitionRegistryPo
     @Override
     public void postProcessBeanDefinitionRegistry(SpringApplicationContext context) {
         context.getBeanDefinition().forEach((key , value) ->{
+//            Method[] methods = value.getBeanClass().getMethods();
+//            for (int i = 0; i < methods.length; i++) {
+//                methods[i].getAnnotation();
+//            }
             //查看beandefinition上面的注解
             Annotation componentScan = value.getBeanClass().getDeclaredAnnotation(ComponentScan.class);
             if(componentScan !=null && componentScan instanceof ComponentScan){
@@ -40,8 +47,15 @@ public class ConfigurationClassPostProcessor implements BeanDefinitionRegistryPo
                     try {
                         Class clazz = Class.forName(clazzName);
                         Annotation component = clazz.getDeclaredAnnotation(Component.class);
+                        String beanName = null;
                         if(component !=null && component instanceof Component){
-                            context.register(clazz);
+                            beanName = context.register(clazz);
+                        }
+                        if(ProxyTemplate.class.isAssignableFrom(clazz)){
+                            Annotation proxyScan = clazz.getAnnotation(ProxyScan.class);
+                            if(proxyScan != null && proxyScan instanceof ProxyScan){
+                                context.registerProxyTemplate(((ProxyScan) proxyScan).value(),beanName);
+                            }
                         }
                     } catch (ClassNotFoundException e) {
                         e.printStackTrace();
